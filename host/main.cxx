@@ -1,4 +1,4 @@
-#include <shared/stdafx.hpp>
+#include <shared/stdafx.hxx>
 
 using FaultlineFn = void( * )();
 

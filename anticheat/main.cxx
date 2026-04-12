@@ -1,8 +1,6 @@
-#include <shared/stdafx.hpp>
-#include <shared/safe_handle.hpp>
-#include "stack_walk.hpp"
-
-#define DLL_EXPORT extern "C" __declspec(dllexport)
+#include <shared/stdafx.hxx>
+#include <shared/safe_handle.hxx>
+#include "stack_walk.hxx"
 
 SafeHandle MonitorThread;
 

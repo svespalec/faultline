@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+#include "defines.hxx"
+
 #include <print>
 #include <thread>
 #include <iostream>
