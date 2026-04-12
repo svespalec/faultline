@@ -1,6 +1,6 @@
 #pragma once
 
-// Defined via CMake for DLL targets, switches between dllexport/dllimport.
+// DLL projects set FAULTLINE_EXPORT in their CMakeLists.txt
 #ifdef FAULTLINE_EXPORT
   #define ANTICHEAT_API extern "C" __declspec(dllexport)
 #else
