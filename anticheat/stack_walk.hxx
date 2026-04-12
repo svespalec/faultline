@@ -1,14 +1,15 @@
 #pragma once
 
+#include "module_checker.hxx"
+
 #include <dbghelp.h>
 
 #pragma comment( lib, "dbghelp.lib" )
-#pragma comment( lib, "psapi.lib" )
 
 struct StackFrame {
   std::uintptr_t Pc{};
-  bool KnownModule{};
+  bool WithinKnownModule{};
   std::string ModuleName{};
 };
 
-[[nodiscard]] std::vector<StackFrame> CaptureStack( std::uintptr_t ThreadId );
+[[nodiscard]] std::vector<StackFrame> CaptureStack( std::uintptr_t ThreadId, const ModuleChecker& Checker );

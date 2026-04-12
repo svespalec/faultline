@@ -1,7 +1,9 @@
 add_library( anticheat SHARED
   main.cxx
   faultline.cxx
+  module_checker.cxx
   stack_walk.cxx
+  working_set_engine.cxx
 )
 
 target_link_libraries( anticheat PRIVATE shared )

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "stack_walk.hxx"
+#include "engine.hxx"
+#include "module_checker.hxx"
 
 class Faultline {
 public:
@@ -8,7 +9,6 @@ public:
   void Stop();
 
 private:
-  static DWORD WINAPI MonitorThreadProc( LPVOID Param );
-
-  SafeHandle MonitorThread;
+  ModuleChecker Checker;
+  std::vector<std::unique_ptr<IEngine>> Engines;
 };

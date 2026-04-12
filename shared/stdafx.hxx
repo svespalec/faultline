@@ -6,6 +6,7 @@
 #include <windows.h>
 
 #include <iostream>
+#include <memory>
 #include <print>
 #include <string>
 #include <thread>

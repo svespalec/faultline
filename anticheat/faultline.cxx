@@ -1,41 +1,37 @@
+#include <shared/stdafx.hxx>
 #include "faultline.hxx"
+#include "working_set_engine.hxx"
 
 void Faultline::Start() {
   //
-  // Check if we're already running.
-  //
-  if ( MonitorThread ) {
-    return;
-  }
-
-  //
-  // Set up symbolic context engine.
+  // Set up the symbol engine for stack resolution
   //
   SymSetOptions( SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS );
   SymInitialize( GetCurrentProcess(), nullptr, TRUE );
 
-  MonitorThread.Handle = CreateThread( nullptr, 0, MonitorThreadProc, nullptr, 0, nullptr );
+  //
+  // Register and start all engines
+  //
+  Engines.push_back( std::make_unique<WorkingSetEngine>( Checker ) );
 
-  if ( !MonitorThread ) {
-    LOG_ERROR( "Failed to create monitor thread: {}", GetLastError() );
-    return;
+  for ( auto& Engine : Engines ) {
+    Engine->Start();
   }
 
   LOG_OK( "Faultline started" );
 }
 
 void Faultline::Stop() {
-  if ( MonitorThread ) {
-    WaitForSingleObject( MonitorThread, 2000 );
+  //
+  // Stop engines in reverse order
+  //
+  for ( auto It = Engines.rbegin(); It != Engines.rend(); ++It ) {
+    ( *It )->Stop();
   }
+
+  Engines.clear();
 
   SymCleanup( GetCurrentProcess() );
 
   LOG_INFO( "Faultline stopped" );
-}
-
-DWORD WINAPI Faultline::MonitorThreadProc( LPVOID ) {
-  LOG_STEP( "Monitor thread running" );
-
-  return 0;
 }
