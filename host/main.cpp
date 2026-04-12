@@ -1,6 +1,6 @@
 #include <shared/stdafx.hpp>
 
-using StartFaultLineFn = void( * )();
+using FaultLineFn = void( * )();
 
 int main() {
   auto Dll = LoadLibraryA( "anticheat.dll" );
@@ -10,10 +10,11 @@ int main() {
     return 1;
   }
 
-  auto Start = reinterpret_cast<StartFaultLineFn>( GetProcAddress( Dll, "StartFaultLine" ) );
+  auto Start = reinterpret_cast<FaultLineFn>( GetProcAddress( Dll, "StartFaultLine" ) );
+  auto Stop = reinterpret_cast<FaultLineFn>( GetProcAddress( Dll, "StopFaultLine" ) );
 
-  if ( !Start ) {
-    std::printf( "Failed to find StartFaultLine export: %lu\n", GetLastError() );
+  if ( !Start || !Stop ) {
+    std::printf( "Failed to resolve exports: %lu\n", GetLastError() );
     return 1;
   }
 
@@ -23,6 +24,8 @@ int main() {
   // Keep the host alive while faultline runs.
   //
   std::getchar();
+
+  Stop();
 
   return 0;
 }

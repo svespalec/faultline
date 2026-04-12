@@ -35,3 +35,13 @@ DLL_EXPORT void StartFaultLine() {
     std::printf( "Failed to create monitor thread: %lu", GetLastError() );
   }
 }
+
+DLL_EXPORT void StopFaultLine() {
+  if ( MonitorThread ) {
+    WaitForSingleObject( MonitorThread, 2000 );
+    CloseHandle( MonitorThread );
+    MonitorThread = nullptr;
+  }
+
+  SymCleanup( GetCurrentProcess() );
+}
