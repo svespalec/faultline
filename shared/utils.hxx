@@ -1,6 +1,18 @@
 #pragma once
 
 //
+// Checks whether the specified page protection has any execute bit set
+//
+inline bool IsExecutablePage( unsigned long Protection ) noexcept {
+  constexpr auto Mask = PAGE_EXECUTE
+                      | PAGE_EXECUTE_READ
+                      | PAGE_EXECUTE_READWRITE
+                      | PAGE_EXECUTE_WRITECOPY;
+
+  return ( Protection & Mask ) != 0;
+}
+
+//
 // Extract filename from a full path
 // "C:\Windows\System32\ntdll.dll" -> "ntdll.dll"
 //
