@@ -15,7 +15,7 @@ static DWORD WINAPI MonitorThreadProc( LPVOID ) {
   return 0;
 }
 
-DLL_EXPORT void StartFaultLine() {
+DLL_EXPORT void StartFaultline() {
   //
   // Check if we're already running.
   //
@@ -36,7 +36,7 @@ DLL_EXPORT void StartFaultLine() {
   }
 }
 
-DLL_EXPORT void StopFaultLine() {
+DLL_EXPORT void StopFaultline() {
   if ( MonitorThread ) {
     WaitForSingleObject( MonitorThread, 2000 );
     CloseHandle( MonitorThread );
