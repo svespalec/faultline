@@ -56,8 +56,11 @@ void ModuleChecker::Refresh() {
 }
 
 bool ModuleChecker::IsKnownPc( std::uintptr_t Pc ) const {
+  //
+  // If we have no modules, don't silently trust everything
+  //
   if ( Ranges.empty() ) {
-    return true;
+    return false;
   }
 
   //

@@ -3,6 +3,10 @@
 #include "working_set_engine.hxx"
 
 void Faultline::Start() {
+  if ( !Engines.empty() ) {
+    return;
+  }
+
   //
   // Set up the symbol engine for stack resolution
   //

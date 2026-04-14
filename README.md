@@ -41,11 +41,11 @@ flowchart LR
   F -- Yes --> I[Ignore]
 ```
 
-## Thread hijacking detection from usermode
+## Catching thread hijacks from usermode
 
-This is where it gets interesting. If an external process hijacks a thread inside the host via `SetThreadContext` / `NtSetContextThread`, APC injection, or similar techniques and redirects execution into injected memory, the page fault still fires. The `FaultingPc` still resolves to memory outside any known module, and faultline catches it.
+This also covers thread hijacking. If an external process redirects a thread via `SetThreadContext` / `NtSetContextThread`, APC injection, or similar into injected memory, the page fault still fires. The `FaultingPc` still lands outside any known module, and faultline catches it.
 
-There isn't really a clean way to detect thread hijacking today. There's no kernel callback for context changes, and while ETW can trace the relevant syscalls, that's indirect at best. Faultline sidesteps the problem entirely by observing the side effects of execution rather than trying to intercept the redirection itself. It doesn't matter how the thread got there or who pointed it there. If it executes from unregistered memory and faults a page, it's visible.
+What's actually being detected is the side effect: execution from memory that isn't backed by a loaded module, not the redirection itself. There's no kernel callback for context changes, and ETW can trace the relevant syscalls but that's indirect at best. Faultline skips the interception problem entirely and just watches where threads end up executing. If it's unregistered memory and it faults a page, it's visible.
 
 ## Components
 

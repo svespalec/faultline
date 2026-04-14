@@ -91,6 +91,14 @@ void WorkingSetEngine::Poll() {
     if ( GetWsChangesEx( GetCurrentProcess(), WatchBuffer, &BufBytes ) ) {
       auto Count = static_cast<std::size_t>( BufBytes ) / sizeof( PSAPI_WS_WATCH_INFORMATION_EX );
       ProcessEntries( Count );
+    } else if ( GetLastError() == ERROR_MORE_DATA ) {
+      //
+      // Buffer overflowed, some faults were lost. Process what we got
+      //
+      LOG_WARN( "Working set watch buffer overflow, some faults were lost" );
+
+      auto Count = static_cast<std::size_t>( BufBytes ) / sizeof( PSAPI_WS_WATCH_INFORMATION_EX );
+      ProcessEntries( Count );
     }
 
     Sleep( PollIntervalMs );

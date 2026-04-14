@@ -351,13 +351,19 @@ static bool HijackThread( HANDLE Process, DWORD Tid, BYTE* Entry ) {
   WriteProcessMemory( Process, Stub, SpinCode, sizeof( SpinCode ), nullptr );
 
   //
-  // Redirect the thread to the payload entry point.
-  // Align the stack to 16 bytes (x64 ABI), then push the spin stub address as the return address.
+  // Redirect the thread to the payload entry point
+  //
+  // x64 ABI needs 16-byte alignment before the call and 32 bytes of
+  // shadow space above the return address for RCX/RDX/R8/R9 spills
+  //
+  //   RSP+0   return address (spin stub)
+  //   RSP+8   shadow[0..3]
+  //   RSP+32  ...
   //
   CONTEXT Hijacked = Original;
 
   Hijacked.Rsp &= ~0xFull;
-  Hijacked.Rsp -= 8;
+  Hijacked.Rsp -= 40; // 8 (return addr) + 32 (shadow space)
   Hijacked.Rip = reinterpret_cast<DWORD64>( Entry );
   Hijacked.Rcx = 0; // LPVOID param
 
