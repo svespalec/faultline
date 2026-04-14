@@ -25,7 +25,14 @@ This catches code that was injected via manual mapping, `VirtualAllocEx` + `Writ
 1. Start `host.exe`
 2. Run `injector.exe` in a separate terminal
 3. The host console will log any detected suspicious execution along with stack traces
-   
+
 ## Demo
 
 <img width="2408" height="868" alt="image" src="https://github.com/user-attachments/assets/dfcbaa5e-5e84-4a82-9df3-ad8bfe965e56" />
+
+## Limitations
+
+- The working set watch API only fires on the first access to a page. Once a page is resident in the working set, further execution from it is invisible.
+- Detection is reactive. By the time the fault is observed, the injected code has already run.
+- Code caves or patches within legitimate modules will not be caught since the `FaultingPc` resolves to a known module range.
+- The poll-based design means short lived threads may exit before a stack walk can be performed.
