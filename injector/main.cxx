@@ -28,6 +28,41 @@ static DWORD FindPid( const char* Name ) {
   return 0;
 }
 
+//
+// Find a thread in the target process that we can hijack.
+// Skips the main thread (lowest TID) and picks the first other one,
+// which should be the game loop thread.
+//
+static DWORD FindHijackableThread( DWORD Pid ) {
+  SafeHandle Snapshot( CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 ) );
+
+  if ( Snapshot.Handle == INVALID_HANDLE_VALUE ) {
+    return 0;
+  }
+
+  THREADENTRY32 Entry{};
+  Entry.dwSize = sizeof( Entry );
+
+  if ( !Thread32First( Snapshot, &Entry ) ) {
+    return 0;
+  }
+
+  DWORD HighestTid = 0;
+
+  do {
+    if ( Entry.th32OwnerProcessID == Pid ) {
+      if ( Entry.th32ThreadID > HighestTid ) {
+        HighestTid = Entry.th32ThreadID;
+      }
+    }
+  } while ( Thread32Next( Snapshot, &Entry ) );
+
+  //
+  // The game thread is created last so it has the highest TID.
+  //
+  return HighestTid;
+}
+
 struct MapResult {
   BYTE* RemoteBase = nullptr;
   DWORD ExportRva = 0;
@@ -268,11 +303,94 @@ static MapResult ManualMap( HANDLE Process, const char* DllPath ) {
   return Result;
 }
 
+static bool HijackThread( DWORD Tid, BYTE* Entry ) {
+  constexpr auto Access = THREAD_SUSPEND_RESUME
+                        | THREAD_GET_CONTEXT
+                        | THREAD_SET_CONTEXT;
+
+  SafeHandle Thread( OpenThread( Access, FALSE, Tid ) );
+
+  if ( !Thread ) {
+    LOG_ERROR( "OpenThread failed: {}", GetLastError() );
+    return false;
+  }
+
+  if ( SuspendThread( Thread ) == static_cast<DWORD>( -1 ) ) {
+    LOG_ERROR( "SuspendThread failed: {}", GetLastError() );
+    return false;
+  }
+
+  //
+  // Save the original context so we can restore it later
+  //
+  CONTEXT Original{};
+  Original.ContextFlags = CONTEXT_FULL;
+
+  if ( !GetThreadContext( Thread, &Original ) ) {
+    LOG_ERROR( "GetThreadContext failed: {}", GetLastError() );
+    ResumeThread( Thread );
+    return false;
+  }
+
+  LOG_INFO( "Original RIP: {:#018x}", Original.Rip );
+
+  //
+  // Redirect the thread to the payload entry point.
+  // We align the stack to 16 bytes as its required by x64 ABI
+  //
+  CONTEXT Hijacked = Original;
+
+  Hijacked.Rip = reinterpret_cast<DWORD64>( Entry );
+  Hijacked.Rsp &= ~0xFull;
+  Hijacked.Rcx = 0; // LPVOID param
+
+  if ( !SetThreadContext( Thread, &Hijacked ) ) {
+    LOG_ERROR( "SetThreadContext failed: {}", GetLastError() );
+    ResumeThread( Thread );
+    return false;
+  }
+
+  LOG_OK( "Hijacked TID {} -> RIP {:#018x}", Tid,
+    reinterpret_cast<std::uintptr_t>( Entry )
+  );
+
+  ResumeThread( Thread );
+
+  //
+  // Let the payload run and give faultline time to detect it.
+  // The payload sleeps for 2s internally, so we'll wait a bit longer.
+  //
+  Sleep( 3000 );
+
+  //
+  // Restore the original context so the game thread can resume normally
+  //
+  SuspendThread( Thread );
+  SetThreadContext( Thread, &Original );
+  ResumeThread( Thread );
+
+  LOG_OK( "Restored original context for TID {}", Tid );
+
+  return true;
+}
+
 int main( int Argc, char** Argv ) {
-  const char* TargetName = Argc > 1 ? Argv[ 1 ] : "host.exe";
-  const char* PayloadPath = Argc > 2 ? Argv[ 2 ] : "payload.dll";
+  bool Hijack = false;
+  std::vector<const char*> Positional;
+
+  for ( int I = 1; I < Argc; ++I ) {
+    if ( std::strcmp( Argv[ I ], "--hijack" ) == 0 ) {
+      Hijack = true;
+    } else {
+      Positional.push_back( Argv[ I ] );
+    }
+  }
+
+  const char* TargetName = Positional.size() > 0 ? Positional[ 0 ] : "host.exe";
+  const char* PayloadPath = Positional.size() > 1 ? Positional[ 1 ] : "payload.dll";
 
   LOG_STEP( "Looking for {}", TargetName );
+  LOG_STEP( "Mode: {}", Hijack ? "thread hijack" : "remote thread" );
 
   DWORD Pid = FindPid( TargetName );
 
@@ -300,24 +418,47 @@ int main( int Argc, char** Argv ) {
 
   auto* Entry = RemoteBase + ExportRva;
 
-  LOG_STEP( "Creating remote thread at {:#018x}",
-    reinterpret_cast<std::uintptr_t>( Entry )
-  );
+  if ( Hijack ) {
+    //
+    // Find and hijack an existing thread in the target
+    //
+    DWORD Tid = FindHijackableThread( Pid );
 
-  SafeHandle Thread( CreateRemoteThread(
-    Process, nullptr, 0,
-    reinterpret_cast<LPTHREAD_START_ROUTINE>( Entry ),
-    nullptr, 0, nullptr
-  ) );
+    if ( !Tid ) {
+      LOG_ERROR( "No hijackable thread found" );
+      return 1;
+    }
 
-  if ( !Thread ) {
-    LOG_ERROR( "CreateRemoteThread failed: {}", GetLastError() );
-    return 1;
+    LOG_STEP( "Hijacking TID {} -> {:#018x}", Tid,
+      reinterpret_cast<std::uintptr_t>( Entry )
+    );
+
+    if ( !HijackThread( Tid, Entry ) ) {
+      return 1;
+    }
+  } else {
+    //
+    // Default: create a new remote thread
+    //
+    LOG_STEP( "Creating remote thread at {:#018x}",
+      reinterpret_cast<std::uintptr_t>( Entry )
+    );
+
+    SafeHandle Thread( CreateRemoteThread(
+      Process, nullptr, 0,
+      reinterpret_cast<LPTHREAD_START_ROUTINE>( Entry ),
+      nullptr, 0, nullptr
+    ) );
+
+    if ( !Thread ) {
+      LOG_ERROR( "CreateRemoteThread failed: {}", GetLastError() );
+      return 1;
+    }
+
+    LOG_OK( "Thread created, waiting for completion" );
+
+    WaitForSingleObject( Thread, 10'000 );
   }
-
-  LOG_OK( "Thread created, waiting for completion" );
-
-  WaitForSingleObject( Thread, 10'000 );
 
   LOG_OK( "Done" );
 

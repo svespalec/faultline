@@ -1,8 +1,8 @@
 #include <shared/stdafx.hxx>
 
 //
-// Payload entrypoint called by the injector via CreateRemoteThread
-// The image is manually mapped so it won't appear in PEB module lists so it will hit our checks :)
+// Payload entrypoint called by the injector via CreateRemoteThread or thread hijack.
+// The image is manually mapped so it won't appear in PEB module lists.
 //
 extern "C" __declspec( dllexport ) DWORD WINAPI PayloadRun( LPVOID ) {
   constexpr std::size_t PageSize = 4096;
