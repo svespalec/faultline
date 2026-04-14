@@ -72,7 +72,7 @@ Both trigger detection, but the host runs a background game loop thread that ser
 
 ## Demo
 
-<img width="2408" height="868" alt="image" src="https://github.com/user-attachments/assets/dfcbaa5e-5e84-4a82-9df3-ad8bfe965e56" />
+https://github.com/user-attachments/assets/333cd0b7-32e7-4dbb-8cbe-7b2b7125527e
 
 ## Limitations
 
