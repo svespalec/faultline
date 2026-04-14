@@ -33,34 +33,33 @@ static DWORD FindPid( const char* Name ) {
 // Skips the main thread (lowest TID) and picks the first other one,
 // which should be the game loop thread.
 //
-static DWORD FindHijackableThread( DWORD Pid ) {
-  SafeHandle Snapshot( CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 ) );
+//
+// Read the game thread TID from the host's named shared memory section.
+//
+static DWORD FindHijackableThread() {
+  LOG_STEP( "Reading target thread ID from shared memory" );
 
-  if ( Snapshot.Handle == INVALID_HANDLE_VALUE ) {
+  SafeHandle Mapping( OpenFileMappingA( FILE_MAP_READ, FALSE, "FaultlineGameTid" ) );
+
+  if ( !Mapping ) {
+    LOG_ERROR( "Shared memory section not found (is the host running?)" );
     return 0;
   }
 
-  THREADENTRY32 Entry{};
-  Entry.dwSize = sizeof( Entry );
+  auto* Ptr = static_cast<DWORD*>(
+    MapViewOfFile( Mapping, FILE_MAP_READ, 0, 0, sizeof( DWORD ) )
+  );
 
-  if ( !Thread32First( Snapshot, &Entry ) ) {
+  if ( !Ptr ) {
     return 0;
   }
 
-  DWORD HighestTid = 0;
+  DWORD Tid = *Ptr;
+  UnmapViewOfFile( Ptr );
 
-  do {
-    if ( Entry.th32OwnerProcessID == Pid ) {
-      if ( Entry.th32ThreadID > HighestTid ) {
-        HighestTid = Entry.th32ThreadID;
-      }
-    }
-  } while ( Thread32Next( Snapshot, &Entry ) );
+  LOG_OK( "Resolved game thread TID {} from host", Tid );
 
-  //
-  // The game thread is created last so it has the highest TID.
-  //
-  return HighestTid;
+  return Tid;
 }
 
 struct MapResult {
@@ -218,9 +217,7 @@ static MapResult ManualMap( HANDLE Process, const char* DllPath ) {
         continue;
       }
 
-      LOG_INFO( "Resolving imports from {} ({:#018x})",
-        DllName, reinterpret_cast<std::uintptr_t>( Dll )
-      );
+      LOG_STEP( "Resolving imports from {}", DllName );
 
       // Prefer OriginalFirstThunk when present
       DWORD OrigRva = Desc->OriginalFirstThunk
@@ -303,7 +300,7 @@ static MapResult ManualMap( HANDLE Process, const char* DllPath ) {
   return Result;
 }
 
-static bool HijackThread( DWORD Tid, BYTE* Entry ) {
+static bool HijackThread( HANDLE Process, DWORD Tid, BYTE* Entry ) {
   constexpr auto Access = THREAD_SUSPEND_RESUME
                         | THREAD_GET_CONTEXT
                         | THREAD_SET_CONTEXT;
@@ -335,14 +332,41 @@ static bool HijackThread( DWORD Tid, BYTE* Entry ) {
   LOG_INFO( "Original RIP: {:#018x}", Original.Rip );
 
   //
+  // Write a tiny spin stub (jmp $) in the host process
+  // This becomes the return address for the payload so the thread
+  // spins harmlessly instead of crashing when PayloadRun returns.
+  //
+  auto* Stub = reinterpret_cast<BYTE*>( VirtualAllocEx(
+    Process, nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+  ) );
+
+  if ( !Stub ) {
+    LOG_ERROR( "Failed to allocate spin stub: {}", GetLastError() );
+    ResumeThread( Thread );
+    return false;
+  }
+
+  BYTE SpinCode[] = { 0xEB, 0xFE }; // jmp $
+
+  WriteProcessMemory( Process, Stub, SpinCode, sizeof( SpinCode ), nullptr );
+
+  //
   // Redirect the thread to the payload entry point.
-  // We align the stack to 16 bytes as its required by x64 ABI
+  // Align the stack to 16 bytes (x64 ABI), then push the spin stub address as the return address.
   //
   CONTEXT Hijacked = Original;
 
-  Hijacked.Rip = reinterpret_cast<DWORD64>( Entry );
   Hijacked.Rsp &= ~0xFull;
+  Hijacked.Rsp -= 8;
+  Hijacked.Rip = reinterpret_cast<DWORD64>( Entry );
   Hijacked.Rcx = 0; // LPVOID param
+
+  //
+  // Write the spin stub address onto the stack as the return address
+  //
+  auto StubAddr = reinterpret_cast<DWORD64>( Stub );
+
+  WriteProcessMemory( Process, reinterpret_cast<void*>( Hijacked.Rsp ), &StubAddr, 8, nullptr );
 
   if ( !SetThreadContext( Thread, &Hijacked ) ) {
     LOG_ERROR( "SetThreadContext failed: {}", GetLastError() );
@@ -368,6 +392,8 @@ static bool HijackThread( DWORD Tid, BYTE* Entry ) {
   SuspendThread( Thread );
   SetThreadContext( Thread, &Original );
   ResumeThread( Thread );
+
+  VirtualFreeEx( Process, Stub, 0, MEM_RELEASE );
 
   LOG_OK( "Restored original context for TID {}", Tid );
 
@@ -422,7 +448,7 @@ int main( int Argc, char** Argv ) {
     //
     // Find and hijack an existing thread in the target
     //
-    DWORD Tid = FindHijackableThread( Pid );
+    DWORD Tid = FindHijackableThread();
 
     if ( !Tid ) {
       LOG_ERROR( "No hijackable thread found" );
@@ -433,7 +459,7 @@ int main( int Argc, char** Argv ) {
       reinterpret_cast<std::uintptr_t>( Entry )
     );
 
-    if ( !HijackThread( Tid, Entry ) ) {
+    if ( !HijackThread( Process, Tid, Entry ) ) {
       return 1;
     }
   } else {

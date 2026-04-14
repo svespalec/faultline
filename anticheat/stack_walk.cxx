@@ -75,6 +75,15 @@ std::vector<StackFrame> CaptureStack( std::uintptr_t ThreadId, const ModuleCheck
 
     auto Pc = static_cast<std::uintptr_t>( Sf.AddrPC.Offset );
 
+    //
+    // Stop at obviously bogus frames from corrupted stacks (e.g. after thread hijack).
+    // Below 64K is never valid usermode code, above 0x7FFF'FFFFFFFF is kernel space,
+    // and 0xCCCCCCCC is just MSVC uninitialized stack fill.
+    //
+    if ( Pc < 0x10000 || Pc > 0x7FFF'FFFFFFFF || ( Pc & 0xFFFFFFFF ) == 0xCCCCCCCC ) {
+      break;
+    }
+
     Frames.push_back( {
       .Pc                = Pc,
       .WithinKnownModule = Checker.IsKnownPc( Pc ),

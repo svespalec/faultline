@@ -6,14 +6,49 @@ using FaultlineFn = void( * )();
 // Fake game loop that runs on its own thread.
 // Gives the injector a stable, long-lived thread to hijack.
 //
+static DWORD GameTid = 0;
+
 static DWORD WINAPI GameThread( LPVOID ) {
-  LOG_STEP( "Game thread started (TID {})", GetCurrentThreadId() );
+  GameTid = GetCurrentThreadId();
+
+  LOG_STEP( "Game thread started (TID {})", GameTid );
 
   while ( true ) {
     Sleep( 16 ); // ~60 fps tick
   }
 
   return 0;
+}
+
+//
+// Publish the game thread TID via named shared memory so the injector can find the right thread to hijack
+//
+static SafeHandle SharedMapping;
+
+static void PublishGameTid() {
+  SharedMapping.Handle = CreateFileMappingA(
+    INVALID_HANDLE_VALUE,
+    nullptr,
+    PAGE_READWRITE,
+    0,
+    sizeof( DWORD ),
+    "FaultlineGameTid"
+  );
+
+  if ( !SharedMapping ) {
+    return;
+  }
+
+  auto* Ptr = static_cast<DWORD*>(
+    MapViewOfFile( SharedMapping, FILE_MAP_WRITE, 0, 0, sizeof( DWORD ) )
+  );
+
+  if ( Ptr ) {
+    *Ptr = GameTid;
+    UnmapViewOfFile( Ptr );
+
+    LOG_OK( "Published game thread TID {} via shared memory", GameTid );
+  }
 }
 
 int main() {
@@ -40,7 +75,14 @@ int main() {
   SafeHandle Game( CreateThread( nullptr, 0, GameThread, nullptr, 0, nullptr ) );
 
   //
-  // Keep the host alive while faultline runs.
+  // Give the game thread time to start, then publish its TID
+  //
+  Sleep( 100 );
+
+  PublishGameTid();
+
+  //
+  // Keep the host alive while faultline runs
   //
   std::getchar();
 
