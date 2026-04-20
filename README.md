@@ -10,6 +10,9 @@ Faultline polls these events, checks whether each `FaultingPc` falls within a kn
 
 This catches code that was injected via manual mapping, shellcode injection, or similar techniques where the executable memory is never registered with the Windows loader.
 
+A naive mapper trips the event path on the first execute. A smarter mapper allocates `PAGE_READWRITE`, populates pages via `WriteProcessMemory` (kernel-serviced, no user-mode `FaultingPc`) and flips to `PAGE_EXECUTE_READ` afterward, so the first execute never soft-faults. Faultline also polls `QueryWorkingSet` -- sibling of `GetWsChangesEx` in the same working-set API -- and flags any resident executable page outside every loaded module. Private pre-paged regions show up here even though no fault event was ever recorded for them.
+
+
 ```mermaid
 flowchart LR
   subgraph Attacker["Attacker (external process)"]
@@ -76,7 +79,12 @@ https://github.com/user-attachments/assets/333cd0b7-32e7-4dbb-8cbe-7b2b7125527e
 
 ## Limitations
 
-- The working set watch API only fires on the first access to a page. Once a page is resident in the working set, further execution from it is invisible.
+- The event path (`GetWsChangesEx`) only fires on in-process-instruction faults -- cross-process writes and other kernel-initiated page-ins don't appear in its buffer. The snapshot path (`QueryWorkingSet`) compensates, but it can only flag regions that are resident *and* currently executable at poll time.
 - Detection is reactive. By the time the fault is observed, the injected code has already run.
 - Code caves or patches within legitimate modules will not be caught since the `FaultingPc` resolves to a known module range.
 - The poll-based design means short lived threads may exit before a stack walk can be performed.
+- Module stomping (writing code into an unused section of a legitimately-loaded DLL) is not caught. The `FaultingPc` and the current per-page protection both resolve inside a known module range; Faultline trusts that range.
+- `EnumProcessModules` reads the PEB loader list. An injected payload that forges an `LDR_DATA_TABLE_ENTRY` for its own region makes itself look like a loaded module, and every subsequent check treats it as known.
+- Both paths run in the target's address space with the same privileges as the payload. An in-process attacker can unload the DLL, patch `Running`, hook `GetWsChangesEx` / `QueryWorkingSet`, or drain the WS buffer before Faultline polls.
+- Kernel-mode or hypervisor-resident cheats can dispatch without ever faulting a user-mode VA, or clear the `EPROCESS` working-set-watch state directly. Usermode working-set signals go dark.
+- The snapshot path intentionally skips `MEM_IMAGE` pages to avoid racing the loader during DLL load. Cheats that manually map via `NtCreateSection(SEC_IMAGE)` land as `MEM_IMAGE` and won't be flagged without hash or path verification of the backing file.
